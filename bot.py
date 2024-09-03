@@ -19,6 +19,8 @@ LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT = range(6)
 # File path to store user data
 DATA_FILE = "user_data.json"
 
+TRANSLATIONS_FILE = "translations.json"
+
 # Load existing user data from file
 def load_user_data(file_path):
     if os.path.exists(file_path):
@@ -31,72 +33,12 @@ def load_user_data(file_path):
 
 user_data = load_user_data(DATA_FILE)
 
-# Language translation dictionary
-translations = {
-    "en": {
-        "start": "Hello! I'm OpenGames bot. I can help you with registration and retrieve your previous registrations.",
-        "select_language": "Please select your preferred language:",
-        "register": "Register",
-        "retrieve": "Retrieve Data",
-        "change_language": "Change Language",
-        "ask_first_name": "Let's start with your registration. What's your first name?",
-        "ask_last_name": "Great! Now, what's your surname?",
-        "ask_email": "Perfect! Can you provide your email address?",
-        "ask_cust_amount": "Thanks! How many people will be attending?",
-        "thank_you": "Thank you for the information! Here's a summary of your registration:",
-        "invalid_number": "Please enter a valid number for the number of people.",
-        "no_registrations": "You have no previous registrations.",
-        "first_name": "First Name",
-        "last_name": "Last Name",
-        "email": "Email",
-        "number_of_people": "Number of People",
-        "new_registration": "New Registration",
-        "pdf_invoice": "Invoice PDF",
-        "main_menu": "What would you like to do next?",
-    },
-    "lv": {
-        "start": "Sveiki! Es esmu OpenGames bots. Es varu jums palīdzēt ar reģistrāciju un atgūt jūsu iepriekšējās reģistrācijas.",
-        "select_language": "Lūdzu, izvēlieties vēlamo valodu:",
-        "register": "Reģistrēties",
-        "retrieve": "Apskatīt datus",
-        "change_language": "Mainīt valodu",
-        "ask_first_name": "Sāksim ar jūsu reģistrāciju. Kāds ir jūsu vārds?",
-        "ask_last_name": "Lieliski! Kāds ir jūsu uzvārds?",
-        "ask_email": "Perfekti! Vai varat norādīt savu e-pasta adresi?",
-        "ask_cust_amount": "Paldies! Cik cilvēki piedalīsies?",
-        "thank_you": "Paldies par informāciju! Šeit ir jūsu reģistrācijas kopsavilkums:",
-        "invalid_number": "Lūdzu, ievadiet derīgu cilvēku skaitu.",
-        "no_registrations": "Jums nav iepriekšēju reģistrāciju.",
-        "first_name": "Vārds",
-        "last_name": "Uzvārds",
-        "email": "E-pasts",
-        "number_of_people": "Cilvēku skaits",
-        "new_registration": "Jauna reģistrācija",
-        "pdf_invoice": "Rēķins PDF formātā",
-        "main_menu": "Ko jūs vēlētos darīt tālāk?",
-    },
-    "ru": {
-        "start": "Привет! Я бот OpenGames. Я могу помочь вам с регистрацией и получить ваши предыдущие регистрации.",
-        "select_language": "Пожалуйста, выберите предпочитаемый язык:",
-        "register": "Регистрация",
-        "retrieve": "Получить данные",
-        "change_language": "Изменить язык",
-        "ask_first_name": "Начнем с вашей регистрации. Как ваше имя?",
-        "ask_last_name": "Отлично! Как ваша фамилия?",
-        "ask_email": "Прекрасно! Можете указать свой адрес электронной почты?",
-        "ask_cust_amount": "Спасибо! Сколько человек будет присутствовать?",
-        "thank_you": "Спасибо за информацию! Вот сводка вашей регистрации:",
-        "invalid_number": "Пожалуйста, введите действительное количество человек.",
-        "no_registrations": "У вас нет предыдущих регистраций.",
-        "first_name": "Имя",
-        "last_name": "Фамилия",
-        "email": "Электронная почта",
-        "number_of_people": "Количество человек",
-        "new_registration": "Новая регистрация",
-        "pdf_invoice": "PDF-счет",
-        "main_menu": "Что бы вы хотели сделать дальше?",
-    }
-}
+# Load translations from the JSON file
+if os.path.exists(TRANSLATIONS_FILE):
+    with open(TRANSLATIONS_FILE, 'r', encoding='utf-8') as file:
+        translations = json.load(file)
+else:
+    raise FileNotFoundError(f"{TRANSLATIONS_FILE} not found!")
 
 # Function to retrieve the translation
 def t(key: str, lang: str = 'en') -> str:
@@ -104,12 +46,8 @@ def t(key: str, lang: str = 'en') -> str:
 
 async def start(update: Update, context: CallbackContext) -> int:
     # Display welcome message in all languages
-    welcome_message = (
-        f"{translations['en']['start']}\n\n"
-        f"{translations['lv']['start']}\n\n"
-        f"{translations['ru']['start']}\n\n"
-    )
-    await update.message.reply_text(welcome_message)
+    combined_message = "\n\n".join([t("start", lang_code) for lang_code in translations])
+    await update.message.reply_text(combined_message)
 
     # Offer language selection with buttons
     keyboard = [
@@ -212,11 +150,6 @@ async def ask_cust_amount(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text(t("invalid_number", lang))
         return CUST_AMOUNT  # Stay in CUST_AMOUNT state
 
-    # Generate PDF summary
-    pdf_file = generate_pdf(user_id, user_data[user_id][-1], lang)
-        if pdf_file:
-        await context.bot.send_document(chat_id="@chanel_name", document=open(pdf_file, 'rb'), filename=pdf_file)
-        os.remove(pdf_file)  # Clean up the generated file
 
     # Send summary and PDF
     summary = (
@@ -226,10 +159,15 @@ async def ask_cust_amount(update: Update, context: CallbackContext) -> int:
         f"{t('number_of_people', lang)}: {cust_amount}\n"
     )
     await update.message.reply_text(f"{t('thank_you', lang)}\n\n{summary}")
-    await update.message.reply_document(document=open(pdf_file, 'rb'))
 
     # Send the summary to the specified channel
-    await context.bot.send_message(chat_id="@og_cc_pdf", text=f"{t('new_registration', lang)}:\n\n" + summary)
+    await context.bot.send_message(chat_id="@YOUR_TG_CHANNEL", text=f"{t('new_registration', lang)}:\n\n" + summary)
+
+    # Generate PDF summary
+    pdf_file = generate_pdf(user_id, user_data[user_id][-1], lang)
+    await context.bot.send_document(chat_id="@YOUR_TG_CHANNEL", document=open(pdf_file, 'rb'), filename=pdf_file)
+    
+    os.remove(pdf_file)  # Clean up the generated file
 
     return await main_menu(update, context)  # Go back to main menu after registration
 
@@ -259,9 +197,6 @@ def generate_pdf(user_id: str, user_info: dict, lang: str) -> str:
     user_info = user_data[user_id][-1]
     pdf_filename = f"OG_{today_str}_{invoice_number}_{user_info['first_name']}_{user_info['last_name']}.pdf"
     pdf_path = os.path.join("./invoice_store", pdf_filename)
-    # Create a PDF document
-    pdf = SimpleDocTemplate(pdf_filename, pagesize=A4)
-    elements = []
 
     # Create the PDF document
     doc = SimpleDocTemplate(pdf_path, pagesize=A4)
@@ -336,6 +271,8 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
     user_id = str(update.message.from_user.id)
     if user_id in user_data and user_data[user_id]:
         registrations = user_data[user_id]
+        summaries = []
+        
         for i, reg in enumerate(registrations, start=1):
             lang = reg.get('lang', 'en')
             summary = (
@@ -344,10 +281,14 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
                 f"{t('email', lang)}: {reg.get('email', 'Unknown')}, "
                 f"{t('number_of_people', lang)}: {reg.get('cust_amount', 'Unknown')}\n"
             )
-            await update.message.reply_text(summary)
+            summaries.append(summary)
+        
+        # Combine all summaries into one message
+        response = "\n".join(summaries)
+        await update.message.reply_text(response)
     else:
         await update.message.reply_text(t("no_registrations", 'en'))
-
+        
 def main():
     token = "YOUR_BOT_TOKEN"
     app = Application.builder().token(token).build()
