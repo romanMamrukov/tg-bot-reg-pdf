@@ -91,16 +91,6 @@ Retrieve previous registrations by typing /retrieve.
 ### 8. Deployment
 To deploy the bot, you may consider using services like Heroku, AWS Lambda, or any other cloud platform that supports Python applications.
 
-### License
-This project is licensed under the MIT License.
-
 ### Acknowledgements
 * python-telegram-bot for the Telegram API.
 * ReportLab for PDF generation.
-
-### Key Highlights:
-
-- **Markdown Formatting**: The instructions are formatted using appropriate Markdown syntax for headings, bullet points, and numbered lists.
-- **Links**: External links, like those to Python's website, BotFather, and the `LICENSE`, are formatted to be clickable in a GitHub README.
-- **Code Blocks**: Commands and code snippets are provided in code blocks to ensure clarity.
-- **Structure**: The document is structured in a way that guides users from setting up the environment to running and using the bot, making it easy to follow.
