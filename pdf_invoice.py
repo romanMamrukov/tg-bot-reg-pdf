@@ -28,10 +28,11 @@ def get_invoice_number() -> int:
 
     return max(numbers) + 1 if numbers else 1
 
-def generate_pdf(user_id: str, user_info: dict, lang: str) -> str:
+def generate_pdf(user_info: dict, game_info: dict, lang: str) -> str:
     # Generate a PDF invoice with tables
     today_str = datetime.now().strftime("%d%m%y")
     invoice_number = get_invoice_number()
+    unit_price = float(game_info.get('price_per_person', 0.00))
     pdf_filename = f"OG_{today_str}_{invoice_number}_{user_info['first_name']}_{user_info['last_name']}.pdf"
     pdf_path = os.path.join("./invoice_store", pdf_filename)
 
@@ -68,11 +69,10 @@ def generate_pdf(user_id: str, user_info: dict, lang: str) -> str:
 
     # Main Invoice Table
     event_date = datetime.now() + timedelta(days=14)
-    unit_price = 10.00
     total_amount = user_info.get('cust_amount', 0) * unit_price
     table_data = [
         ["Nosaukums", "Mērv.", "Daudzums", "Cena", "Summa"],
-        [f"Open games {event_date.strftime('%d.%m.%y')}", "kompl.", str(user_info.get('cust_amount', 0)), "10.00 EUR", f"{total_amount:.2f} EUR"]
+        [f"Open games {event_date.strftime('%d.%m.%y')}", "kompl.", str(user_info.get('cust_amount', 0)), f"{unit_price:.2f} EUR", f"{total_amount:.2f} EUR"]
     ]
 
     invoice_table = Table(table_data, colWidths=[7 * cm, 2 * cm, 2 * cm, 3 * cm, 3 * cm])
