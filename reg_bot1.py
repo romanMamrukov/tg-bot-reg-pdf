@@ -1,0 +1,337 @@
+import csv
+import json
+import os
+import base64
+import httpx
+import logging
+import asyncio
+from urllib.parse import parse_qs, urlparse
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackContext
+from pdf_invoice import generate_pdf
+
+"""This bot works with registration, language selection, posting summary of the game before reg and just a summary of reg, summary of the game and reg after registration, pdf invoice generator post it to user"""
+""" TODO PDF invoice generated and posted to other group channel along with registartion summary, store and retreive registration data, update games.csv data with users registred to keep available spots updated, optimise performance and refactor code"""
+# Define states for the conversation
+LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT = range(6)
+
+# File paths
+DATA_FILE = "user_data.json" #TODO store and retreave data properly
+TRANSLATIONS_FILE = "translations.json" #Translation Dictionary
+BOT_CONFIG_FILE = "bot_config.json"
+PDF_SETTINGS_FILE = "pdf_settings.json" #TODO adjustments to PDF not via code
+GAMES_CSV_FILE = "games.csv" #Games info storage
+CHANNEL_ID = "@YOUR_CAHNNEL_NAME"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+
+# Load configurations and data
+def load_json(file_path):
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return json.load(file)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+def load_csv(file_path):
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, newline='', encoding='utf-8') as file:
+                return list(csv.DictReader(file))
+        except Exception as e:
+            print(f"Error reading CSV: {e}")
+            return []
+    return []
+
+user_data = load_json(DATA_FILE)
+translations = load_json(TRANSLATIONS_FILE)
+bot_config = load_json(BOT_CONFIG_FILE)
+pdf_settings = load_json(PDF_SETTINGS_FILE)
+games = load_csv(GAMES_CSV_FILE)
+
+# Function to get game information from CSV file
+def get_game_info(game_id: str):
+    try:
+        with open(GAMES_CSV_FILE, mode='r', newline='', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row['game_id'] == game_id:
+                    return row
+    except FileNotFoundError:
+        print("The file 'games.csv' was not found.")
+    except Exception as e:
+        print(f"An error occurred while reading the CSV file: {e}")
+    return None
+
+# Function to retrieve the translation
+def t(key: str, lang: str = 'en') -> str:
+    return translations.get(lang, translations['en']).get(key, key)
+
+# Helper function to escape MarkdownV2 characters
+def escape_markdown(text):
+    if text is None:
+        return ''
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    return ''.join(['\\' + char if char in escape_chars else char for char in text])
+
+# Helper function to decode and parse deeplink
+def decode_deeplink(encoded_start_data):
+    try:
+        encoded_start_data += '=' * (-len(encoded_start_data) % 4)
+        decoded_start_data = base64.urlsafe_b64decode(encoded_start_data).decode('utf-8')
+        params = parse_qs(decoded_start_data)
+        if 'game_id' in params and isinstance(params['game_id'], list):
+            params['game_id'] = params['game_id'][0]
+        return params
+    except Exception as e:
+        print(f"Error decoding start data: {e}")
+        return {}
+
+async def start(update: Update, context: CallbackContext) -> int:
+    try:
+        if context.args:
+            encoded_start_data = context.args[0]
+            params = decode_deeplink(encoded_start_data)
+
+            game_id = params.get('game_id', '')
+            if game_id:
+                game_info = get_game_info(game_id)
+                
+                if game_info:
+                    context.chat_data['game_info'] = game_info
+                    user_id = str(update.message.from_user.id)
+                    lang = user_data.get(user_id, [{}])[-1].get('lang', 'en')
+
+                    welcome_message = (
+                        f"{t('start', 'en')}\n\n"
+                        f"{t('start', 'lv')}\n\n"
+                        f"{t('start', 'ru')}\n\n"
+                    )
+                    
+                    await update.message.reply_text(welcome_message)
+
+                    language_buttons = bot_config.get('language_buttons', ["English", "Latviešu", "Русский"])
+                    buttons = [KeyboardButton(btn) for btn in language_buttons]
+                    keyboard = [buttons]
+                    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+                    await update.message.reply_text(t("select_language", lang), reply_markup=reply_markup)
+                    
+                    return LANGUAGE
+                else:
+                    await update.message.reply_text("Game not found.")
+            else:
+                await update.message.reply_text("Invalid or missing game_id.")
+        else:
+            await update.message.reply_text("No game information provided.")
+    except Exception as e:
+        await update.message.reply_text(f"An unexpected error occurred: {e}")
+
+def get_language_code(lang_selection):
+    if "latviešu" in lang_selection:
+        return 'lv'
+    elif "русский" in lang_selection:
+        return 'ru'
+    else:
+        return 'en'
+
+async def select_language(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang_selection = update.message.text.lower()
+
+    lang = get_language_code(lang_selection)
+    user_data.setdefault(user_id, []).append({'lang': lang})
+
+    return await main_menu(update, context)
+
+async def main_menu(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+
+    game_info = context.chat_data.get('game_info', {})
+
+    if game_info:
+        game_name = escape_markdown(game_info.get('game_name', ''))
+        game_place = escape_markdown(game_info.get('place', ''))
+        game_date = escape_markdown(game_info.get('date', ''))
+        game_time = escape_markdown(game_info.get('time', ''))
+        game_price = escape_markdown(game_info.get('price_per_person', ''))
+
+        await update.message.reply_text(
+            f"{t('registering_for', lang)}\n"
+            f"🏆 {t('game', lang)}: {game_name}\n"
+            f"📍 {t('place', lang)}: {game_place}\n"
+            f"🕒 {t('date', lang)}: {game_date}\n"
+            f"🕒 {t('time', lang)}: {game_time}\n"
+            f"🎟️ {t('price_per_person', lang)}: €{game_price}\n"
+        )
+    else:
+        await update.message.reply_text("Game information is missing.")
+
+    keyboard = [
+        [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
+        [KeyboardButton(t("change_language", lang))]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
+
+    return MAIN_MENU
+
+async def handle_main_menu(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+    selection = update.message.text
+
+    if selection == t("register", lang):
+        await update.message.reply_text(t("ask_first_name", lang))
+        return FIRST_NAME
+
+    elif selection == t("retrieve", lang):
+        await retrieve(update, context)
+        return MAIN_MENU
+
+    elif selection == t("change_language", lang):
+        return await start(update, context)
+
+    else:
+        await update.message.reply_text(t("invalid_option", lang))
+        return MAIN_MENU
+
+async def get_first_name(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+    first_name = update.message.text
+
+    # Store user's first name
+    user_data[user_id][-1]['first_name'] = first_name
+
+    await update.message.reply_text(t("ask_last_name", lang))
+    return LAST_NAME
+
+async def get_last_name(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+    last_name = update.message.text
+
+    # Store user's last name
+    user_data[user_id][-1]['last_name'] = last_name
+
+    await update.message.reply_text(t("ask_email", lang))
+    return EMAIL
+
+async def get_email(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+    email = update.message.text
+
+    # Store user's email
+    user_data[user_id][-1]['email'] = email
+
+    await update.message.reply_text(t("ask_cust_amount", lang))
+    return CUST_AMOUNT
+
+async def get_cust_amount(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data[user_id][-1]['lang']
+    cust_amount = update.message.text
+
+    try:
+        cust_amount = int(cust_amount)
+        user_data[user_id][-1]['cust_amount'] = cust_amount
+
+        game_info = context.chat_data.get('game_info', {})
+        if not game_info:
+            await update.message.reply_text(t("game_info_missing", lang))
+            return MAIN_MENU
+
+        # Calculate total price
+        price_per_person = float(game_info.get('price_per_person', 0))
+        total_price = price_per_person * cust_amount
+
+        user_data[user_id][-1]['total_price'] = total_price
+
+        # Generate the registration summary
+        summary = (
+            f"{t('summary', lang)}\n"
+            f"🏆 {t('game', lang)}: {escape_markdown(game_info.get('game_name', ''))}\n"
+            f"📍 {t('place', lang)}: {escape_markdown(game_info.get('place', ''))}\n"
+            f"🕒 {t('date', lang)}: {escape_markdown(game_info.get('date', ''))}\n"
+            f"🕒 {t('time', lang)}: {escape_markdown(game_info.get('time', ''))}\n"
+            f"🎟️ {t('price_per_person', lang)}: €{escape_markdown(game_info.get('price_per_person', ''))}\n"
+            f"👤 {t('name', lang)}: {escape_markdown(user_data[user_id][-1]['first_name'])} {escape_markdown(user_data[user_id][-1]['last_name'])}\n"
+            f"✉️ {t('email', lang)}: {escape_markdown(user_data[user_id][-1]['email'])}\n"
+            f"🧑‍🤝‍🧑 {t('attendees', lang)}: {cust_amount}\n"
+            f"💶 {t('total_price', lang)}: €{total_price:.2f}\n"
+        )
+
+        await update.message.reply_text(summary)
+
+        # Generate PDF invoice
+        pdf_file_path = generate_pdf(user_data[user_id][-1], game_info, lang)
+
+        # Send PDF to the user and the channel
+        with open(pdf_file_path, 'rb') as pdf_file:
+            await update.message.reply_document(pdf_file)
+            await context.bot.send_document(chat_id=CHANNEL_ID, document=pdf_file)
+
+        # Save user data to user_data.json
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=4)
+
+        await update.message.reply_text(t("registration_complete", lang))
+        return MAIN_MENU
+
+    except ValueError:
+        await update.message.reply_text(t("invalid_number", lang))
+        return CUST_AMOUNT
+
+async def retrieve(update: Update, context: CallbackContext) -> None:
+    """Retrieve previous registrations."""
+    user_id = str(update.message.from_user.id)
+    lang = user_data.get(user_id, [{}])[-1].get('lang', 'en')
+
+    if user_id not in user_data:
+        await update.message.reply_text(t("no_registrations", lang))
+    else:
+        previous_registrations = user_data[user_id]
+        for reg in previous_registrations:
+            reg_summary = (
+                f"{t('name', lang)}: {reg.get('first_name', '')} {reg.get('last_name', '')}\n"
+                f"{t('email', lang)}: {reg.get('email', '')}\n"
+                f"{t('attendees', lang)}: {reg.get('cust_amount', 1)}\n"
+                f"{t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
+            )
+            await update.message.reply_text(reg_summary)
+
+# Set up the bot
+def main():
+    # Set up logging
+    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Create the application
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Define the conversation handler
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_language)],
+            MAIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
+            FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_first_name)],
+            LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_last_name)],
+            EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
+            CUST_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cust_amount)],
+        },
+        fallbacks=[],
+    )
+
+    # Add the conversation handler to the application
+    application.add_handler(conv_handler)
+
+    # Run the bot
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
+
