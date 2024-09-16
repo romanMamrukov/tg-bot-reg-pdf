@@ -210,7 +210,17 @@ async def handle_main_menu(update: Update, context: CallbackContext) -> int:
         return MAIN_MENU
 
     elif selection == t("change_language", lang):
-        return MAIN_MENU
+        select_langauge_all = (
+                        f"{t('select_language', 'en')}\n\n"
+                        f"{t('select_language', 'lv')}\n\n"
+                        f"{t('select_language', 'ru')}\n\n"
+                    )
+        language_buttons = bot_config.get('language_buttons', ["English", "Latviešu", "Русский"])
+        buttons = [KeyboardButton(btn) for btn in language_buttons]
+        keyboard = [buttons]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text(select_langauge_all, reply_markup=reply_markup)
+        return LANGUAGE
 
     else:
         await update.message.reply_text(t("invalid_option", lang))
