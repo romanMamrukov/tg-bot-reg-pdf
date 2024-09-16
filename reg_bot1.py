@@ -5,23 +5,36 @@ import base64
 import httpx
 import logging
 import asyncio
+import pandas as pd
 from urllib.parse import parse_qs, urlparse
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackContext
 from pdf_invoice import generate_pdf
 
-"""This bot works with registration, language selection, posting summary of the game before reg and just a summary of reg, summary of the game and reg after registration, pdf invoice generator post it to user"""
-""" TODO PDF invoice generated and posted to other group channel along with registartion summary, store and retreive registration data, update games.csv data with users registred to keep available spots updated, optimise performance and refactor code"""
+"""This bot works with 
+Registration, 
+Language selection, 
+Posts summary of the game before registraion,
+Posts summary of the game and registation after registration, 
+PDF invoice generator post it to user,
+PDF invoice generated and posted to other group channel along with registartion summary, 
+Stores and retreive registration data,
+"""
+""" TODO 
+Update games.csv data with users registred to keep available spots updated, 
+Optimise performance and refactor code
+"""
+
 # Define states for the conversation
 LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT = range(6)
 
 # File paths
-DATA_FILE = "user_data.json" #TODO store and retreave data properly
+DATA_FILE = "user_data.json" #Store and retreave user_data
 TRANSLATIONS_FILE = "translations.json" #Translation Dictionary
 BOT_CONFIG_FILE = "bot_config.json"
 PDF_SETTINGS_FILE = "pdf_settings.json" #TODO adjustments to PDF not via code
 GAMES_CSV_FILE = "games.csv" #Games info storage
-CHANNEL_ID = "@YOUR_CAHNNEL_NAME"
+CHANNEL_ID = "@YOUR_CHANNEL_ID"
 BOT_TOKEN = "YOUR_BOT_TOKEN"
 
 # Load configurations and data
@@ -108,6 +121,12 @@ async def start(update: Update, context: CallbackContext) -> int:
                         f"{t('start', 'lv')}\n\n"
                         f"{t('start', 'ru')}\n\n"
                     )
+
+                    select_langauge_all = (
+                        f"{t('select_language', 'en')}\n\n"
+                        f"{t('select_language', 'lv')}\n\n"
+                        f"{t('select_language', 'ru')}\n\n"
+                    )
                     
                     await update.message.reply_text(welcome_message)
 
@@ -115,7 +134,7 @@ async def start(update: Update, context: CallbackContext) -> int:
                     buttons = [KeyboardButton(btn) for btn in language_buttons]
                     keyboard = [buttons]
                     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-                    await update.message.reply_text(t("select_language", lang), reply_markup=reply_markup)
+                    await update.message.reply_text(select_langauge_all, reply_markup=reply_markup)
                     
                     return LANGUAGE
                 else:
@@ -191,7 +210,7 @@ async def handle_main_menu(update: Update, context: CallbackContext) -> int:
         return MAIN_MENU
 
     elif selection == t("change_language", lang):
-        return await start(update, context)
+        return MAIN_MENU
 
     else:
         await update.message.reply_text(t("invalid_option", lang))
@@ -242,7 +261,7 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         game_info = context.chat_data.get('game_info', {})
         if not game_info:
             await update.message.reply_text(t("game_info_missing", lang))
-            return MAIN_MENU
+            return await MAIN_MENU
 
         # Calculate total price
         price_per_person = float(game_info.get('price_per_person', 0))
@@ -269,10 +288,25 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         # Generate PDF invoice
         pdf_file_path = generate_pdf(user_data[user_id][-1], game_info, lang)
 
-        # Send PDF to the user and the channel
-        with open(pdf_file_path, 'rb') as pdf_file:
-            await update.message.reply_document(pdf_file)
-            await context.bot.send_document(chat_id=CHANNEL_ID, document=pdf_file)
+        if not os.path.exists(pdf_file_path):
+            await update.message.reply_text("Error: PDF file not found.")
+        else:
+            user_data[user_id][-1]['pdf_path'] = pdf_file_path
+        
+        if os.path.exists(pdf_file_path) and os.path.getsize(pdf_file_path) > 0:
+            try:
+                # Send PDF to the user
+                with open(pdf_file_path, 'rb') as pdf_file:
+                    await update.message.reply_document(pdf_file)
+                
+                # Send PDF to the channel
+                with open(pdf_file_path, 'rb') as pdf_file:
+                    await context.bot.send_message(chat_id=CHANNEL_ID, text=f"{t('new_registration', lang)}:\n\n" + summary)
+                    await context.bot.send_document(chat_id=CHANNEL_ID, document=pdf_file)
+
+            except Exception as e:
+                logging.error(f"Error sending PDF: {e}")
+                await update.message.reply_text(f"Error occurred while sending PDF: {e}")
 
         # Save user data to user_data.json
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -285,12 +319,18 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text(t("invalid_number", lang))
         return CUST_AMOUNT
 
+
+def update_game_csv(game_id: str, spots_registered: int):
+    df = pd.read_csv(GAMES_CSV_FILE)
+    df.loc[df['game_id'] == game_id, 'spots_registered'] = spots_registered
+    df.to_csv(GAMES_CSV_FILE, index=False)
+
 async def retrieve(update: Update, context: CallbackContext) -> None:
     """Retrieve previous registrations."""
     user_id = str(update.message.from_user.id)
     lang = user_data.get(user_id, [{}])[-1].get('lang', 'en')
 
-    if user_id not in user_data:
+    if user_id not in user_data or not user_data[user_id]:
         await update.message.reply_text(t("no_registrations", lang))
     else:
         previous_registrations = user_data[user_id]
@@ -302,6 +342,14 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
                 f"{t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
             )
             await update.message.reply_text(reg_summary)
+
+            # Send PDF if available
+            pdf_path = reg.get('pdf_path')
+            if pdf_path and os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as pdf_file:
+                    await update.message.reply_document(pdf_file)
+            else:
+                await update.message.reply_text(t("pdf_not_found", lang))
 
 # Set up the bot
 def main():
@@ -323,7 +371,7 @@ def main():
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
             CUST_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cust_amount)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("start", start), MessageHandler(filters.COMMAND, start)],
     )
 
     # Add the conversation handler to the application
@@ -334,4 +382,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
