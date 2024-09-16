@@ -323,6 +323,12 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
             json.dump(user_data, f, ensure_ascii=False, indent=4)
 
         await update.message.reply_text(t("registration_complete", lang))
+        keyboard = [
+        [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
+        [KeyboardButton(t("change_language", lang))]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
         return MAIN_MENU
 
     except ValueError:
@@ -360,6 +366,14 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
                     await update.message.reply_document(pdf_file)
             else:
                 await update.message.reply_text(t("pdf_not_found", lang))
+
+    keyboard = [
+        [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
+        [KeyboardButton(t("change_language", lang))]
+        ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
+    return MAIN_MENU
 
 # Set up the bot
 def main():
