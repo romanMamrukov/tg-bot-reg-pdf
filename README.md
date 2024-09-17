@@ -93,13 +93,13 @@ mkdir invoice_store
 ### Run the Announcement Bot:
 
 ```bash
-python anno_bot1_test2.py
+python anno_bot1.py
 ```
 
 ### Run the Registration Bot:
 
 ```bash
-python reg_bot1_test2.py
+python reg_bot1.py
 ```
 
 ### Files
