@@ -1,13 +1,23 @@
-# Telegram Bot to register users and provide invoice summary of registration
+# Telegram Bots for Games announcements and to register users, provide invoice summary of registration
 
-This Telegram bot assists users with registration and provides a summary of their registrations, including generating a PDF invoice.
+## Overview
+This repository contains two Telegram bots: 
+1. **Announcement Bot**: Announces upcoming games and provides deeplinks for registration.
+2. **Registration Bot**: Handles user registration, game details summary, and generates PDF invoices.
 
 ## Features
 
-- Multi-language support.
-- Registration process with prompts for first name, last name, email, and the number of attendees.
-- Generates a PDF invoice based on the registration details.
-- Ability to retrieve and view previous registrations.
+### Announcement Bot
+- **Announces Games**: Posts games happening within 7 days to a Telegram channel.
+- **Deeplink Generation**: Each game announcement includes a deeplink to register for the game via the Registration Bot.
+
+### Registration Bot
+- **User Registration**: Registers users for games with details like name, email, and number of attendees.
+- **Language Selection**: Supports multiple languages (English, Latvian, Russian).
+- **Game Summary Posting**: Posts game details before and after registration.
+- **PDF Invoice Generation**: Generates a PDF with registration details and sends it to both the user and an admin group.
+- **User Data Handling**: Saves and retrieves user registration data from `user_data.json`.
+- **Game Spots Update**: Automatically updates the `games.csv` file with remaining spots after registration.
 
 ## Prerequisites
 
@@ -56,8 +66,13 @@ If the requirements.txt file is not available, install the required packages man
 ```bash
 pip install python-telegram-bot==20.0 reportlab
 ```
+### 4. Create the required files:
 
-### 4. Set Up Environment Variables
+- games.csv: Game information.
+- translations.json: Language translations for the bot.
+- user_data.json: Stores user registration data.
+
+### 5. Set Up Environment Variables
 Modify a .env file in the project root directory to store your bot token:
 
 ```bash
@@ -66,31 +81,37 @@ BOT_TOKEN=your-telegram-bot-token
 
 Alternatively, you can directly replace the token in the main() function of your script.
 
-### 5. Prepare the Project Directory
+### 6. Prepare the Project Directory
 Ensure that the following directory is created for storing PDF invoices:
 
 ```bash
 mkdir invoice_store
 ```
 
-### 6. Run the Bot
-Execute the bot using the following command:
+### 6. Run the Bots
+
+### Run the Announcement Bot:
 
 ```bash
-python testbot.py
+python anno_bot1_test2.py
 ```
 
-The bot will start running and listening for user interactions.
+### Run the Registration Bot:
 
-### 7. Using the Bot
-Start a conversation with the bot by typing /start.
-Follow the prompts to register your information.
-The bot will generate a PDF invoice and send it back to you in the chat, as well as store it in the specified directory.
-Retrieve previous registrations by typing /retrieve.
+```bash
+python reg_bot1_test2.py
+```
 
-### 8. Deployment
-To deploy the bot, you may consider using services like Heroku, AWS Lambda, or any other cloud platform that supports Python applications.
+### Files
 
-### Acknowledgements
-* python-telegram-bot for the Telegram API.
-* ReportLab for PDF generation.
+- anno_bot1.py: Handles game announcements and deeplink generation.
+- reg_bot1.py: Handles user registration, language selection, PDF generation, and user data storage.
+- games.csv: Stores game details like game_id, game_name, date, spots_left.
+- translations.json: Contains language translations for bot messages.
+- user_data.json: Stores user registration details.
+- pdf_invoice.py: Script for generating PDF invoices for user registrations.
+
+### To-Do
+- Implement registration cancellation.
+- Add payment link generation and payment confirmation.
+- Add reminders for payments and upcoming games.
