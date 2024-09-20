@@ -5,6 +5,7 @@ import base64
 import httpx
 import logging
 import asyncio
+import yagmail
 import pandas as pd
 from urllib.parse import parse_qs, urlparse
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
@@ -12,6 +13,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from common.pdf_invoice import generate_pdf, user_invoice_num
 from common.file_manager import get_game_info, update_game_csv, store_user_data, get_user_data, cancel_registration_fun
 from common.validation import is_valid_email, is_valid_attendee_count, is_valid_deeplink, is_valid_invoice
+from dotenv import load_dotenv
 
 """This bot works with 
 Registration, 
@@ -22,10 +24,11 @@ PDF invoice generator post it to user,
 PDF invoice generated and posted to other group channel along with registartion summary, 
 Stores and retreive registration data,
 Update games.csv data with users registred to keep available spots updated,
-Store user invoice number, 
+Store user invoice number,
+Cancle registration,
+Summary to user and admin over the email
 """
 """ TODO 
-Cancle registration
 Payment link
 Confirm payment
 Reminder of the paymnet
@@ -44,6 +47,16 @@ PDF_SETTINGS_FILE = "./store/pdf_settings.json" #TODO adjustments to PDF not via
 GAMES_CSV_FILE = "./store/games.csv" #Games info storage
 CHANNEL_ID = "@CHANNEL_ID"
 BOT_TOKEN = "BOT_TOKEN"
+
+# EMAIL DETAILS
+load_dotenv()
+
+EMAIL_HOST = os.getenv("EMAIL_HOST") 
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") 
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
+
+
 
 # Load configurations and data
 def load_json(file_path):
@@ -271,6 +284,46 @@ async def get_email(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text(t("ask_cust_amount", lang))
     return CUST_AMOUNT
 
+def send_registration_email(user_data: dict, lang: str):
+    """Sends a registration summary email to the user and the admin."""
+    try:
+        yag = yagmail.SMTP(EMAIL_USER, EMAIL_PASSWORD, host=EMAIL_HOST)
+        game_details = user_data.get('game_details', {})
+
+        user_summary = (
+            f"{t('summary', lang)}\n"
+            f"{t('name', lang)}: {user_data.get('first_name', '')} {user_data.get('last_name', '')}\n"
+            f"{t('email', lang)}: {user_data.get('email', '')}\n"
+            f"{t('attendees', lang)}: {user_data.get('cust_amount', 1)}\n"
+            f"{t('total_price', lang)}: €{user_data.get('total_price', 0):.2f}\n"
+            f"🏆 {t('game', lang)}: {game_details.get('game_name', '')}\n"
+            f"📍 {t('place', lang)}: {game_details.get('place', '')}\n"
+            f"🕒 {t('date', lang)}: {game_details.get('date', '')}\n"
+            f"🕒 {t('time', lang)}: {game_details.get('time', '')}\n"
+            f"📄 {t('invoice_number', lang)}: {user_data.get('invoice_number', '')}\n"
+        )
+
+        # Send email to user
+        yag.send(
+            to=user_data.get('email', ''),
+            subject=f"{t('registration_confirmation', lang)}",
+            contents=user_summary
+            attachments=[user_data.get('pdf_path')] 
+        )
+
+        # Send email to admin
+        yag.send(
+            to=ADMIN_EMAIL,
+            subject=f"{t('new_registration', lang)}",
+            contents=user_summary
+            attachments=[user_data.get('pdf_path')] 
+        )
+
+        print("Registration confirmation emails sent successfully.")
+
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
 async def get_cust_amount(update: Update, context: CallbackContext) -> int:
     user_id = str(update.message.from_user.id)
     lang = user_data[user_id][-1]['lang']
@@ -354,6 +407,9 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         # Save user data to user_data.json
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(user_data, f, ensure_ascii=False, indent=4)
+
+        # Send registration summary email
+        send_registration_email(user_data[user_id][-1], lang)
 
         await update.message.reply_text(t("registration_complete", lang))
         keyboard = [
