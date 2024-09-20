@@ -42,8 +42,8 @@ TRANSLATIONS_FILE = "./store/translations.json" #Translation Dictionary
 BOT_CONFIG_FILE = "./common/bot_config.json"
 PDF_SETTINGS_FILE = "./store/pdf_settings.json" #TODO adjustments to PDF not via code
 GAMES_CSV_FILE = "./store/games.csv" #Games info storage
-CHANNEL_ID = "@og_reg_announ"
-BOT_TOKEN = "7268049137:AAECb34FfUx3b7do5R9yS12EYYmsiryIaeY"
+CHANNEL_ID = "@CHANNEL_ID"
+BOT_TOKEN = "BOT_TOKEN"
 
 # Load configurations and data
 def load_json(file_path):
