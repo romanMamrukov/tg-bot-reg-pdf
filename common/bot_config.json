@@ -1,0 +1,4 @@
+{
+    "language_buttons": ["English", "Latviešu", "Русский"],
+    "buttons": ["Register", "Retrieve Data", "Change Language", "Cancel Registration"]
+}

@@ -1,0 +1,8 @@
+game_id,game_name,place,date,time,description,price_per_person,spots_all,spots_registered,spots_left
+OP1,Game1,StreetA,2024-09-26,18:00,Game1 is super fun,10,50,0,50
+OP2,Game2,StreetB,2024-09-21,21:00,Game2 match for fans,15,30,24,6
+OP3,Game3,StreetA,2024-09-22,18:00,Game3 is super fun,10,60,0,60
+OP4,Game4,StreetB,2024-09-23,21:00,Game4 match for fans,5,100,0,100
+OP5,Game5,StreetB,2024-09-30,21:00,Game5 match for fans,10,20,0,20
+OP6,Game6,StreetB,2024-09-29,21:00,Game6 match for fans,12,20,0,20
+OP7,Game7,StreetB,2024-09-20,22:00,Game7 match for fans,10,40,0,40

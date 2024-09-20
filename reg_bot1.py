@@ -9,7 +9,9 @@ import pandas as pd
 from urllib.parse import parse_qs, urlparse
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackContext
-from pdf_invoice import generate_pdf
+from common.pdf_invoice import generate_pdf, user_invoice_num
+from common.file_manager import get_game_info, update_game_csv, store_user_data, get_user_data, cancel_registration_fun
+from common.validation import is_valid_email, is_valid_attendee_count, is_valid_deeplink, is_valid_invoice
 
 """This bot works with 
 Registration, 
@@ -19,23 +21,29 @@ Posts summary of the game and registation after registration,
 PDF invoice generator post it to user,
 PDF invoice generated and posted to other group channel along with registartion summary, 
 Stores and retreive registration data,
+Update games.csv data with users registred to keep available spots updated,
+Store user invoice number, 
 """
 """ TODO 
-Update games.csv data with users registred to keep available spots updated, 
+Cancle registration
+Payment link
+Confirm payment
+Reminder of the paymnet
+Reminder of the upcoming game to user
 Optimise performance and refactor code
 """
 
 # Define states for the conversation
-LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT = range(6)
+LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT, CANCEL_INVOICE = range(7)
 
 # File paths
-DATA_FILE = "user_data.json" #Store and retreave user_data
-TRANSLATIONS_FILE = "translations.json" #Translation Dictionary
-BOT_CONFIG_FILE = "bot_config.json"
-PDF_SETTINGS_FILE = "pdf_settings.json" #TODO adjustments to PDF not via code
-GAMES_CSV_FILE = "games.csv" #Games info storage
-CHANNEL_ID = "@YOUR_CHANNEL_ID"
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+DATA_FILE = "./store/user_data.json" #Store and retreave user_data
+TRANSLATIONS_FILE = "./store/translations.json" #Translation Dictionary
+BOT_CONFIG_FILE = "./common/bot_config.json"
+PDF_SETTINGS_FILE = "./store/pdf_settings.json" #TODO adjustments to PDF not via code
+GAMES_CSV_FILE = "./store/games.csv" #Games info storage
+CHANNEL_ID = "@og_reg_announ"
+BOT_TOKEN = "7268049137:AAECb34FfUx3b7do5R9yS12EYYmsiryIaeY"
 
 # Load configurations and data
 def load_json(file_path):
@@ -189,7 +197,7 @@ async def main_menu(update: Update, context: CallbackContext) -> int:
 
     keyboard = [
         [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
-        [KeyboardButton(t("change_language", lang))]
+        [KeyboardButton(t("change_language", lang))], [KeyboardButton(t("cancel_registration", lang))]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
@@ -221,6 +229,10 @@ async def handle_main_menu(update: Update, context: CallbackContext) -> int:
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text(select_langauge_all, reply_markup=reply_markup)
         return LANGUAGE
+    
+    elif selection == t("cancel_registration", lang):
+        await update.message.reply_text(t("provide_invoice", lang))
+        return CANCEL_INVOICE
 
     else:
         await update.message.reply_text(t("invalid_option", lang))
@@ -266,17 +278,27 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
 
     try:
         cust_amount = int(cust_amount)
-        user_data[user_id][-1]['cust_amount'] = cust_amount
+
+        if cust_amount <= 0:
+            await update.message.reply_text(t("invalid_number", lang))
+            return CUST_AMOUNT
 
         game_info = context.chat_data.get('game_info', {})
         if not game_info:
             await update.message.reply_text(t("game_info_missing", lang))
             return await MAIN_MENU
 
+         # Check if there are enough spots available
+        spots_left = int(game_info.get('spots_left', 0))
+        if cust_amount > spots_left:
+            await update.message.reply_text(t("not_enough_spots", lang))
+            return CUST_AMOUNT
+
         # Calculate total price
         price_per_person = float(game_info.get('price_per_person', 0))
         total_price = price_per_person * cust_amount
 
+        user_data[user_id][-1]['cust_amount'] = cust_amount
         user_data[user_id][-1]['total_price'] = total_price
 
         # Generate the registration summary
@@ -297,11 +319,19 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
 
         # Generate PDF invoice
         pdf_file_path = generate_pdf(user_data[user_id][-1], game_info, lang)
+        user_invoice = user_invoice_num()
+        user_data[user_id][-1]['invoice_number'] = user_invoice
 
         if not os.path.exists(pdf_file_path):
             await update.message.reply_text("Error: PDF file not found.")
         else:
             user_data[user_id][-1]['pdf_path'] = pdf_file_path
+            user_data[user_id][-1]['game_details'] = {
+                'game_name': game_info.get('game_name', ''),
+                'place': game_info.get('place', ''),
+                'date': game_info.get('date', ''),
+                'time': game_info.get('time', '')
+            }
         
         if os.path.exists(pdf_file_path) and os.path.getsize(pdf_file_path) > 0:
             try:
@@ -318,14 +348,17 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
                 logging.error(f"Error sending PDF: {e}")
                 await update.message.reply_text(f"Error occurred while sending PDF: {e}")
 
+        # Update game CSV with new spots
+        update_game_csv(game_info['game_id'], spots_registered=int(game_info.get('spots_registered', 0)) + cust_amount)
+
         # Save user data to user_data.json
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(user_data, f, ensure_ascii=False, indent=4)
 
         await update.message.reply_text(t("registration_complete", lang))
         keyboard = [
-        [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
-        [KeyboardButton(t("change_language", lang))]
+            [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
+            [KeyboardButton(t("change_language", lang))], [KeyboardButton(t("cancel_registration", lang))]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
@@ -338,11 +371,15 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
 
 def update_game_csv(game_id: str, spots_registered: int):
     df = pd.read_csv(GAMES_CSV_FILE)
+    # Update the number of spots registered
     df.loc[df['game_id'] == game_id, 'spots_registered'] = spots_registered
+    # Calculate and update the number of spots left
+    df.loc[df['game_id'] == game_id, 'spots_left'] = df['spots_all'] - df['spots_registered']
     df.to_csv(GAMES_CSV_FILE, index=False)
 
 async def retrieve(update: Update, context: CallbackContext) -> None:
     """Retrieve previous registrations."""
+    user_data = load_json(DATA_FILE)
     user_id = str(update.message.from_user.id)
     lang = user_data.get(user_id, [{}])[-1].get('lang', 'en')
 
@@ -356,7 +393,16 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
                 f"{t('email', lang)}: {reg.get('email', '')}\n"
                 f"{t('attendees', lang)}: {reg.get('cust_amount', 1)}\n"
                 f"{t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
+                f"🏆 {t('game', lang)}: {reg.get('game_details', {}).get('game_name', '')}\n"
+                f"📍 {t('place', lang)}: {reg.get('game_details', {}).get('place', '')}\n"
+                f"🕒 {t('date', lang)}: {reg.get('game_details', {}).get('date', '')}\n"
+                f"🕒 {t('time', lang)}: {reg.get('game_details', {}).get('time', '')}\n"
+                f"📄 {t('invoice_number', lang)}: {reg.get('invoice_number', '')}\n"
             )
+            
+            # Only include the "Canceled" line if the registration is canceled
+            if reg.get('canceled'):
+                reg_summary += f"⚠️ {t('canceled', lang)}: {reg.get('canceled', '')}\n"
             await update.message.reply_text(reg_summary)
 
             # Send PDF if available
@@ -369,8 +415,30 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
 
     keyboard = [
         [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
-        [KeyboardButton(t("change_language", lang))]
+        [KeyboardButton(t("change_language", lang))], [KeyboardButton(t("cancel_registration", lang))]
         ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
+    return MAIN_MENU
+
+async def cancel_registration(update: Update, context: CallbackContext) -> int:
+    user_id = str(update.message.from_user.id)
+    lang = user_data.get(user_id, [{}])[-1].get('lang', 'en')
+
+    invoice_number = update.message.text
+
+    if is_valid_invoice(user_data, invoice_number):
+        if cancel_registration_fun(user_id, invoice_number):
+            await update.message.reply_text(t("cancellation_successful", lang))
+        else:
+            await update.message.reply_text(t("cancellation_failed", lang))
+    else:
+        await update.message.reply_text(t("invalid_invoice", lang))
+
+    keyboard = [
+        [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
+        [KeyboardButton(t("change_language", lang))], [KeyboardButton(t("cancel_registration", lang))]
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
     return MAIN_MENU
@@ -394,6 +462,7 @@ def main():
             LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_last_name)],
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
             CUST_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cust_amount)],
+            CANCEL_INVOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cancel_registration)],
         },
         fallbacks=[CommandHandler("start", start), MessageHandler(filters.COMMAND, start)],
     )
@@ -406,3 +475,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

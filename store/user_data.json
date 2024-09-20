@@ -1,0 +1,58 @@
+{
+    "405994484": [
+        {
+            "lang": "ru",
+            "first_name": "Rm",
+            "last_name": "Rm",
+            "email": "Rm@email.com",
+            "cust_amount": 2,
+            "total_price": 30.0,
+            "invoice_number": "OG_200924_2",
+            "pdf_path": "./invoice_store\\OG_200924_1_Rm_Rm.pdf",
+            "game_details": {
+                "game_name": "Game2",
+                "place": "StreetB",
+                "date": "2024-09-21",
+                "time": "21:00"
+            },
+            "canceled": "canceled"
+        },
+        {
+            "lang": "lv",
+            "first_name": "Rm1",
+            "last_name": "Rm1",
+            "email": "Rm1@email.com",
+            "cust_amount": 2,
+            "total_price": 30.0,
+            "invoice_number": "OG_200924_3",
+            "pdf_path": "./invoice_store\\OG_200924_2_Rm1_Rm1.pdf",
+            "game_details": {
+                "game_name": "Game2",
+                "place": "StreetB",
+                "date": "2024-09-21",
+                "time": "21:00"
+            },
+            "canceled": "canceled"
+        },
+        {
+            "lang": "en"
+        },
+        {
+            "lang": "en",
+            "first_name": "rm3",
+            "last_name": "rm3",
+            "email": "rm3@email.com",
+            "cust_amount": 20,
+            "total_price": 300.0,
+            "invoice_number": "OG_200924_4",
+            "pdf_path": "./invoice_store\\OG_200924_3_rm3_rm3.pdf",
+            "game_details": {
+                "game_name": "Game2",
+                "place": "StreetB",
+                "date": "2024-09-21",
+                "time": "21:00"
+            },
+            "canceled": "canceled"
+        }
+    ]
+}
