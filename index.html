@@ -10,12 +10,22 @@
     <script>
         const urlParams = new URLSearchParams(window.location.search);
         const status = urlParams.get('status');
-
+        
         const messageElement = document.getElementById('message');
         if (status === 'success') {
             messageElement.textContent = 'Payment succeeded!';
+            fetch('/update_status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'success', session_id: urlParams.get('session_id') })
+            });
         } else if (status === 'failed') {
             messageElement.textContent = 'Payment failed. Please try again.';
+            fetch('/update_status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'failed', session_id: urlParams.get('session_id') })
+            });
         } else {
             messageElement.textContent = 'No status available.';
         }
