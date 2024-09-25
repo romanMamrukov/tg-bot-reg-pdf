@@ -2,6 +2,7 @@ import logging
 import asyncio
 import base64
 import os
+from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
