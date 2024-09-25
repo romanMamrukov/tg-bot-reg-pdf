@@ -1,5 +1,7 @@
 import os
 import re
+import logging
+import inflect
 from datetime import datetime, timedelta
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -11,6 +13,35 @@ from reportlab.lib.styles import getSampleStyleSheet
 
 # Load the font that supports Latvian characters
 pdfmetrics.registerFont(TTFont('DejaVuSans', 'DejaVuSans.ttf'))
+
+# This is needed for language other then English otherwise inflect will do
+def number_to_latvian_words(num):
+    units = ["", "viens", "divi", "trīs", "četri", "pieci", "seši", "septi", "astoņi", "deviņi"]
+    teens = ["desmit", "vienpadsmit", "divpadsmit", "trīspadsmit", "četrpadsmit", "piecpadsmit", "sešpadsmit", "septiņpadsmit", "astoņpadsmit", "deviņpadsmit"]
+    tens = ["", "desmit", "divdesmit", "trīsdesmit", "četrdesmit", "piecdesmit", "sešdesmit", "septiņdesmit", "astoņdesmit", "deviņdesmit"]
+    hundreds = ["", "simts", "divi simti", "trīs simti", "četri simti", "pieci simti", "seši simti", "septiņi simti", "astoņi simti", "deviņi simti"]
+
+    if num == 0:
+        return "nulle"
+
+    words = []
+    
+    # Handle hundreds
+    if num >= 100:
+        words.append(hundreds[num // 100])
+        num %= 100
+    
+    # Handle tens and units
+    if num >= 20:
+        words.append(tens[num // 10])
+        num %= 10
+    
+    if 10 <= num < 20:
+        words.append(teens[num - 10])
+    elif num < 10:
+        words.append(units[num])
+    
+    return ' '.join(filter(bool, words)).strip()
 
 def get_invoice_number() -> int:
     today = datetime.now().strftime("%d%m%y")
@@ -29,19 +60,45 @@ def get_invoice_number() -> int:
     return max(numbers) + 1 if numbers else 1
 
 def user_invoice_num() -> str:
-    # Get current date and invoice number
     today_str = datetime.now().strftime("%d%m%y")
-    invoice_number = get_invoice_number()  # Use the function that generates the next invoice number
-    # Generate the formatted user invoice number
+    invoice_number = get_invoice_number()
     user_invoice = f"OG_{today_str}_{invoice_number}"
     return user_invoice
 
 def generate_pdf(user_info: dict, game_info: dict, lang: str) -> str:
-    # Generate a PDF invoice with tables
     today_str = datetime.now().strftime("%d%m%y")
     invoice_number = get_invoice_number()
-    game_info = user_info.get('game_info', {})
-    unit_price = float(game_info.get('price_per_person', 0.00))
+    game_info = user_info.get('game_details', {})
+    if not game_info:
+        logging.error("Game details are missing in user_info.")
+    game_name = game_info.get('game_name', "GAME")
+    game_date_str = game_info.get('date', "")
+    try:
+        unit_price = float(game_info.get('price_per_person', 0.00))
+    except ValueError:
+        logging.error(f"Invalid price_per_person in game_info: {game_info.get('price_per_person')}")
+        unit_price = 0.00
+
+     
+    if not game_date_str:
+        logging.warning("Game date is missing. Using current date as fallback.")
+        game_date = datetime.now()
+    else:
+        try:
+            game_date = datetime.strptime(game_date_str, '%Y-%m-%d')
+        except ValueError:
+            logging.error(f"Invalid date format for game_date_str: {game_date_str}")
+            game_date = datetime.now()
+
+    formatted_game_date = game_date.strftime('%d.%m.%y')
+
+    cust_amount = user_info.get('cust_amount', 0)
+    total_amount = cust_amount * unit_price
+
+    total_amount_words = number_to_latvian_words(int(total_amount)) + " eiro un " + number_to_latvian_words(int((total_amount % 1) * 100)) + " centi"
+
+    logging.info(f"Game Name: {game_name}, Game Date: {formatted_game_date}, Unit Price: {unit_price}, Total Amount: {total_amount}")
+
     pdf_filename = f"OG_{today_str}_{invoice_number}_{user_info['first_name']}_{user_info['last_name']}.pdf"
     user_invoice = f"OG_{today_str}_{invoice_number}"
     pdf_path = os.path.join("./invoice_store", pdf_filename)
@@ -78,11 +135,11 @@ def generate_pdf(user_info: dict, game_info: dict, lang: str) -> str:
     elements.append(Table([[" "]]))
 
     # Main Invoice Table
-    event_date = datetime.now() + timedelta(days=14)
+    formatted_game_date = game_date.strftime('%d.%m.%y')
     total_amount = user_info.get('cust_amount', 0) * unit_price
     table_data = [
         ["Nosaukums", "Mērv.", "Daudzums", "Cena", "Summa"],
-        [f"Open games {event_date.strftime('%d.%m.%y')}", "kompl.", str(user_info.get('cust_amount', 0)), f"{unit_price:.2f} EUR", f"{total_amount:.2f} EUR"]
+        [f"{game_name} {formatted_game_date}", "kompl.", str(user_info.get('cust_amount', 0)), f"{unit_price:.2f} EUR", f"{total_amount:.2f} EUR"]
     ]
 
     invoice_table = Table(table_data, colWidths=[7 * cm, 2 * cm, 2 * cm, 3 * cm, 3 * cm])
@@ -97,8 +154,8 @@ def generate_pdf(user_info: dict, game_info: dict, lang: str) -> str:
 
     # Total Amount
     total_data = [
-        ["", "", "Kopā apmaksai", f"{total_amount:.2f} EUR"],
-        ["", "", "", f"(Euro un centi)"]
+        ["", "Kopā apmaksai", "", total_amount_words],
+        ["", "", "", ""]
     ]
 
     total_table = Table(total_data, colWidths=[7 * cm, 2 * cm, 2 * cm, 6 * cm])
@@ -106,7 +163,7 @@ def generate_pdf(user_info: dict, game_info: dict, lang: str) -> str:
         ('FONT', (0, 0), (-1, -1), 'DejaVuSans', 10),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('SPAN', (0, 1), (2, 1)),  # Span the first three columns in the second row
+        ('SPAN', (0, 1), (2, 1)), 
     ]))
     elements.append(total_table)
 
