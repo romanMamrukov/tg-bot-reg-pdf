@@ -6,14 +6,23 @@ import httpx
 import logging
 import asyncio
 import yagmail
+import httpx
+import stripe
+import threading
 import pandas as pd
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO
 from urllib.parse import parse_qs, urlparse
+from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackContext
 from common.pdf_invoice import generate_pdf, user_invoice_num
-from common.file_manager import get_game_info, update_game_csv, store_user_data, get_user_data, cancel_registration_fun
+from common.file_manager import get_game_info, update_game_csv, store_user_data, get_user_data, cancel_registration_fun, save_json
 from common.validation import is_valid_email, is_valid_attendee_count, is_valid_deeplink, is_valid_invoice
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from common.reg_handler import RegistrationHandler
+from common.stripe_handler import StripeHandler
 
 """This bot works with 
 Registration, 
@@ -26,10 +35,10 @@ Stores and retreive registration data,
 Update games.csv data with users registred to keep available spots updated,
 Store user invoice number,
 Cancle registration,
-Summary to user and admin over the email
+Payment link
+Invoice and registration summary over email to user and admin
 """
 """ TODO 
-Payment link
 Confirm payment
 Reminder of the paymnet
 Reminder of the upcoming game to user
@@ -40,23 +49,22 @@ Optimise performance and refactor code
 LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT, CANCEL_INVOICE = range(7)
 
 # File paths
-DATA_FILE = "./store/user_data.json" #Store and retreave user_data
-TRANSLATIONS_FILE = "./store/translations.json" #Translation Dictionary
-BOT_CONFIG_FILE = "./common/bot_config.json"
-PDF_SETTINGS_FILE = "./store/pdf_settings.json" #TODO adjustments to PDF not via code
-GAMES_CSV_FILE = "./store/games.csv" #Games info storage
-CHANNEL_ID = "@CHANNEL_ID"
-BOT_TOKEN = "BOT_TOKEN"
+DATA_FILE = "./store/user_data.json" # User data
+TRANSLATIONS_FILE = "./store/translations.json" # Translation Dictionary
+BOT_CONFIG_FILE = "./common/bot_config.json" # Bot config
+PDF_SETTINGS_FILE = "./store/pdf_settings.json" # PDF and Invoice creation
+GAMES_CSV_FILE = "./store/games.csv" # Games info
 
-# EMAIL DETAILS
+# LOAD TOKEN & CRED DETAILS
 load_dotenv()
 
 EMAIL_HOST = os.getenv("EMAIL_HOST") 
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
-
-
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 # Load configurations and data
 def load_json(file_path):
@@ -67,6 +75,11 @@ def load_json(file_path):
         except json.JSONDecodeError:
             return {}
     return {}
+
+# Function to load user data
+def load_user_data():
+    with open(DATA_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
 def load_csv(file_path):
     if os.path.exists(file_path):
@@ -278,51 +291,16 @@ async def get_email(update: Update, context: CallbackContext) -> int:
     lang = user_data[user_id][-1]['lang']
     email = update.message.text
 
+    # Validate the email
+    if not is_valid_email(email):
+        await update.message.reply_text(t("invalid_email", lang))
+        return EMAIL
+
     # Store user's email
     user_data[user_id][-1]['email'] = email
 
     await update.message.reply_text(t("ask_cust_amount", lang))
     return CUST_AMOUNT
-
-def send_registration_email(user_data: dict, lang: str):
-    """Sends a registration summary email to the user and the admin."""
-    try:
-        yag = yagmail.SMTP(EMAIL_USER, EMAIL_PASSWORD, host=EMAIL_HOST)
-        game_details = user_data.get('game_details', {})
-
-        user_summary = (
-            f"{t('summary', lang)}\n"
-            f"{t('name', lang)}: {user_data.get('first_name', '')} {user_data.get('last_name', '')}\n"
-            f"{t('email', lang)}: {user_data.get('email', '')}\n"
-            f"{t('attendees', lang)}: {user_data.get('cust_amount', 1)}\n"
-            f"{t('total_price', lang)}: €{user_data.get('total_price', 0):.2f}\n"
-            f"🏆 {t('game', lang)}: {game_details.get('game_name', '')}\n"
-            f"📍 {t('place', lang)}: {game_details.get('place', '')}\n"
-            f"🕒 {t('date', lang)}: {game_details.get('date', '')}\n"
-            f"🕒 {t('time', lang)}: {game_details.get('time', '')}\n"
-            f"📄 {t('invoice_number', lang)}: {user_data.get('invoice_number', '')}\n"
-        )
-
-        # Send email to user
-        yag.send(
-            to=user_data.get('email', ''),
-            subject=f"{t('registration_confirmation', lang)}",
-            contents=user_summary
-            attachments=[user_data.get('pdf_path')] 
-        )
-
-        # Send email to admin
-        yag.send(
-            to=ADMIN_EMAIL,
-            subject=f"{t('new_registration', lang)}",
-            contents=user_summary
-            attachments=[user_data.get('pdf_path')] 
-        )
-
-        print("Registration confirmation emails sent successfully.")
-
-    except Exception as e:
-        print(f"Error sending email: {e}")
 
 async def get_cust_amount(update: Update, context: CallbackContext) -> int:
     user_id = str(update.message.from_user.id)
@@ -331,18 +309,18 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
 
     try:
         cust_amount = int(cust_amount)
-
-        if cust_amount <= 0:
+        game_info = context.chat_data.get('game_info', {})
+        spots_left = int(game_info.get('spots_left', 0))
+        
+        if not is_valid_attendee_count(cust_amount, spots_left):
             await update.message.reply_text(t("invalid_number", lang))
             return CUST_AMOUNT
 
-        game_info = context.chat_data.get('game_info', {})
         if not game_info:
             await update.message.reply_text(t("game_info_missing", lang))
             return await MAIN_MENU
 
          # Check if there are enough spots available
-        spots_left = int(game_info.get('spots_left', 0))
         if cust_amount > spots_left:
             await update.message.reply_text(t("not_enough_spots", lang))
             return CUST_AMOUNT
@@ -350,9 +328,34 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         # Calculate total price
         price_per_person = float(game_info.get('price_per_person', 0))
         total_price = price_per_person * cust_amount
+        print(f"Total price: {total_price}")
 
         user_data[user_id][-1]['cust_amount'] = cust_amount
         user_data[user_id][-1]['total_price'] = total_price
+
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'eur',
+                    'product_data': {
+                        'name': game_info.get('game_name', ''),
+                        # Optionally add additional product details here
+                    },
+                    'unit_amount': int(round(total_price * 100)),  # Convert to cents
+                },
+                'quantity': 1,  # One item for the purchase
+            }],
+            mode='payment',
+            metadata={'user_id': user_id},
+            success_url='https://romanmamrukov.github.io/tg-bot-reg-pdf?status=success&session_id={CHECKOUT_SESSION_ID}&user_id={USER_ID}',
+            cancel_url='https://romanmamrukov.github.io/tg-bot-reg-pdf?status=failed&session_id={CHECKOUT_SESSION_ID}&user_id={USER_ID}',
+        )
+
+        # Store the session URL and session ID in user data
+        user_data[user_id][-1]['payment_link'] = session.url  # Payment link
+        user_data[user_id][-1]['payment_status'] = 'pending'  # Initial status
+        user_data[user_id][-1]['session_id'] = session.id  # Stripe session ID
 
         # Generate the registration summary
         summary = (
@@ -368,8 +371,20 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
             f"💶 {t('total_price', lang)}: €{total_price:.2f}\n"
         )
 
-        await update.message.reply_text(summary)
+        # Send payment link with summary and PDF
+        await update.message.reply_text(
+            f"Your registration summary:\n\n{summary}\n\n"
+            f"Click this link to pay: {session.url}"
+        )
 
+        user_data[user_id][-1]['game_details'] = {
+                'game_name': game_info.get('game_name', ''),
+                'place': game_info.get('place', ''),
+                'date': game_info.get('date', ''),
+                'time': game_info.get('time', ''),
+                'price_per_person': game_info.get('price_per_person', '')
+            }
+        
         # Generate PDF invoice
         pdf_file_path = generate_pdf(user_data[user_id][-1], game_info, lang)
         user_invoice = user_invoice_num()
@@ -379,12 +394,6 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
             await update.message.reply_text("Error: PDF file not found.")
         else:
             user_data[user_id][-1]['pdf_path'] = pdf_file_path
-            user_data[user_id][-1]['game_details'] = {
-                'game_name': game_info.get('game_name', ''),
-                'place': game_info.get('place', ''),
-                'date': game_info.get('date', ''),
-                'time': game_info.get('time', '')
-            }
         
         if os.path.exists(pdf_file_path) and os.path.getsize(pdf_file_path) > 0:
             try:
@@ -411,19 +420,94 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         # Send registration summary email
         send_registration_email(user_data[user_id][-1], lang)
 
+        
         await update.message.reply_text(t("registration_complete", lang))
         keyboard = [
             [KeyboardButton(t("register", lang)), KeyboardButton(t("retrieve", lang))],
             [KeyboardButton(t("change_language", lang))], [KeyboardButton(t("cancel_registration", lang))]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
         await update.message.reply_text(t("main_menu", lang), reply_markup=reply_markup)
         return MAIN_MENU
 
-    except ValueError:
+    except Exception as e:
+        logging.error(f"Error: {e}")
         await update.message.reply_text(t("invalid_number", lang))
         return CUST_AMOUNT
 
+def send_registration_email(user_data: dict, lang: str):
+    """Sends a registration summary email to the user and the admin."""
+    try:
+        yag = yagmail.SMTP(EMAIL_USER, EMAIL_PASSWORD, host=EMAIL_HOST)
+        game_details = user_data.get('game_details', {})
+
+        user_summary = (
+            f"{t('summary', lang)}\n"
+            f"{t('name', lang)}: {user_data.get('first_name', '')} {user_data.get('last_name', '')}\n"
+            f"{t('email', lang)}: {user_data.get('email', '')}\n"
+            f"{t('attendees', lang)}: {user_data.get('cust_amount', 1)}\n"
+            f"{t('total_price', lang)}: €{user_data.get('total_price', 0):.2f}\n"
+            f"🏆 {t('game', lang)}: {game_details.get('game_name', '')}\n"
+            f"📍 {t('place', lang)}: {game_details.get('place', '')}\n"
+            f"🕒 {t('date', lang)}: {game_details.get('date', '')}\n"
+            f"🕒 {t('time', lang)}: {game_details.get('time', '')}\n"
+            f"📄 {t('invoice_number', lang)}: {user_data.get('invoice_number', '')}\n"
+        )
+
+        # Send email to user
+        yag.send(
+            to=user_data.get('email', ''),
+            subject=f"{t('registration_confirmation', lang)}",
+            contents=user_summary,
+            attachments=[user_data.get('pdf_path')] 
+        )
+
+        # Send email to admin
+        yag.send(
+            to=ADMIN_EMAIL,
+            subject=f"{t('new_registration', lang)}",
+            contents=user_summary,
+            attachments=[user_data.get('pdf_path')] 
+        )
+
+        print("Registration confirmation emails sent successfully.")
+
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+# Function to process payment updates
+async def check_payment_updates():
+    while True:
+        user_data = load_json(DATA_FILE)
+        
+        # Iterate over users and check for payment updates
+        for user_id, registrations in user_data.items():
+            for registration in registrations:
+                if registration.get('payment_status') == 'complete' and not registration.get('notified'):
+                    # Send success message
+                    await send_success_message(user_id)
+                    registration['notified'] = True  # Mark as notified
+
+                elif registration.get('payment_status') == 'canceled' and not registration.get('notified'):
+                    # Send cancel message
+                    await send_cancel_message(user_id)
+                    registration['notified'] = True  # Mark as notified
+
+        # Save the updated user_data with notification status
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=4)
+
+        # Wait some time before checking again (e.g., every 10 seconds)
+        await asyncio.sleep(10)
+
+async def send_success_message(user_id):
+    """Send a success message to the user via Telegram."""
+    await telegram_app.bot.send_message(chat_id=user_id, text="Your payment was successful!")
+
+async def send_cancel_message(user_id):
+    """Send a cancel message to the user via Telegram."""
+    await telegram_app.bot.send_message(chat_id=user_id, text="Your payment was canceled.")
 
 def update_game_csv(game_id: str, spots_registered: int):
     df = pd.read_csv(GAMES_CSV_FILE)
@@ -454,6 +538,7 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
                 f"🕒 {t('date', lang)}: {reg.get('game_details', {}).get('date', '')}\n"
                 f"🕒 {t('time', lang)}: {reg.get('game_details', {}).get('time', '')}\n"
                 f"📄 {t('invoice_number', lang)}: {reg.get('invoice_number', '')}\n"
+                f"📄 {t('payment_status', lang)}: {reg.get('payment_status', '')}\n"
             )
             
             # Only include the "Canceled" line if the registration is canceled
@@ -506,7 +591,7 @@ def main():
     logger = logging.getLogger(__name__)
 
     # Create the application
-    application = Application.builder().token(BOT_TOKEN).build()
+    app_bot = Application.builder().token(BOT_TOKEN).build()
 
     # Define the conversation handler
     conv_handler = ConversationHandler(
@@ -524,11 +609,10 @@ def main():
     )
 
     # Add the conversation handler to the application
-    application.add_handler(conv_handler)
-
+    app_bot.add_handler(conv_handler)
+    
     # Run the bot
-    application.run_polling()
+    app_bot.run_polling()
 
 if __name__ == "__main__":
     main()
-
