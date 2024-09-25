@@ -10,8 +10,11 @@ from urllib.parse import quote_plus
 from common.file_manager import load_csv  # Load CSV file from file_manager
 
 # Your Telegram bot token and Channel
-telegram_bot_token = "BOT_TOKEN"
-channel_id = "@CHANNEL_ID"  # Replace with your Telegram channel name
+# LOAD TOKEN & CHANNEL_ID
+load_dotenv()
+
+telegram_bot_token = os.getenv("BOT_TOKEN_ANNO")
+channel_id = os.getenv("CHANNEL_ID_ANNO")  # Replace with your Telegram channel name
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
