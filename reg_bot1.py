@@ -34,26 +34,27 @@ PDF invoice generated and posted to other group channel along with registartion 
 Stores and retreive registration data,
 Update games.csv data with users registred to keep available spots updated,
 Store user invoice number,
-Cancle registration,
+Cancle registration - mark in user data,
 Payment link
 Invoice and registration summary over email to user and admin
 """
 """ TODO 
-Confirm payment
+Confirm payment - Only in STRIPE dashboard manually
 Reminder of the paymnet
 Reminder of the upcoming game to user
 Optimise performance and refactor code
 """
 
 # Define states for the conversation
-LANGUAGE, MAIN_MENU, FIRST_NAME, LAST_NAME, EMAIL, CUST_AMOUNT, CANCEL_INVOICE = range(7)
+LANGUAGE, MAIN_MENU, FULL_NAME, EMAIL, CUST_AMOUNT, CANCEL_INVOICE = range(6)
 
 # File paths
-DATA_FILE = "./store/user_data.json" # User data
-TRANSLATIONS_FILE = "./store/translations.json" # Translation Dictionary
-BOT_CONFIG_FILE = "./common/bot_config.json" # Bot config
-PDF_SETTINGS_FILE = "./store/pdf_settings.json" # PDF and Invoice creation
-GAMES_CSV_FILE = "./store/games.csv" # Games info
+DATA_FILE = "./store/user_data.json" #Store and retreave user_data
+TRANSLATIONS_FILE = "./store/translations.json" #Translation Dictionary
+BOT_CONFIG_FILE = "./common/bot_config.json"
+PDF_SETTINGS_FILE = "./store/pdf_settings.json" #TODO adjustments to PDF not via code
+GAMES_CSV_FILE = "./store/games.csv" #Games info storage
+DATABASE = "./common/tg_bot_db.db"
 
 # LOAD TOKEN & CRED DETAILS
 load_dotenv()
@@ -64,7 +65,13 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# STRIP Credentials
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # Use your test secret key
+
+# Function to connect to the SQLite database
+def db_connect():
+    conn = sqlite3.connect(DATABASE)
+    return conn
 
 # Load configurations and data
 def load_json(file_path):
@@ -211,7 +218,7 @@ async def main_menu(update: Update, context: CallbackContext) -> int:
         game_price = escape_markdown(game_info.get('price_per_person', ''))
 
         await update.message.reply_text(
-            f"{t('registering_for', lang)}\n"
+            f"📢 {t('registering_for', lang)}\n"
             f"🏆 {t('game', lang)}: {game_name}\n"
             f"📍 {t('place', lang)}: {game_place}\n"
             f"🕒 {t('date', lang)}: {game_date}\n"
@@ -236,8 +243,8 @@ async def handle_main_menu(update: Update, context: CallbackContext) -> int:
     selection = update.message.text
 
     if selection == t("register", lang):
-        await update.message.reply_text(t("ask_first_name", lang))
-        return FIRST_NAME
+        await update.message.reply_text(t("ask_full_name", lang))
+        return FULL_NAME
 
     elif selection == t("retrieve", lang):
         await retrieve(update, context)
@@ -264,24 +271,13 @@ async def handle_main_menu(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text(t("invalid_option", lang))
         return MAIN_MENU
 
-async def get_first_name(update: Update, context: CallbackContext) -> int:
+async def get_full_name(update: Update, context: CallbackContext) -> int:
     user_id = str(update.message.from_user.id)
     lang = user_data[user_id][-1]['lang']
-    first_name = update.message.text
+    full_name = update.message.text
 
-    # Store user's first name
-    user_data[user_id][-1]['first_name'] = first_name
-
-    await update.message.reply_text(t("ask_last_name", lang))
-    return LAST_NAME
-
-async def get_last_name(update: Update, context: CallbackContext) -> int:
-    user_id = str(update.message.from_user.id)
-    lang = user_data[user_id][-1]['lang']
-    last_name = update.message.text
-
-    # Store user's last name
-    user_data[user_id][-1]['last_name'] = last_name
+    # Store user's full name
+    user_data[user_id][-1]['full_name'] = full_name
 
     await update.message.reply_text(t("ask_email", lang))
     return EMAIL
@@ -292,7 +288,7 @@ async def get_email(update: Update, context: CallbackContext) -> int:
     email = update.message.text
 
     # Validate the email
-    if not is_valid_email(email):
+    if not is_valid_email(email):  # Assuming validate_email is your validation function
         await update.message.reply_text(t("invalid_email", lang))
         return EMAIL
 
@@ -312,7 +308,7 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         game_info = context.chat_data.get('game_info', {})
         spots_left = int(game_info.get('spots_left', 0))
         
-        if not is_valid_attendee_count(cust_amount, spots_left):
+        if not is_valid_attendee_count(cust_amount, spots_left):  # Assuming validate_cust_amount is your validation function
             await update.message.reply_text(t("invalid_number", lang))
             return CUST_AMOUNT
 
@@ -344,7 +340,7 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
                     },
                     'unit_amount': int(round(total_price * 100)),  # Convert to cents
                 },
-                'quantity': 1,  # One item for the purchase
+                'quantity': 1,  # Assuming one item for the purchase
             }],
             mode='payment',
             metadata={'user_id': user_id},
@@ -353,19 +349,18 @@ async def get_cust_amount(update: Update, context: CallbackContext) -> int:
         )
 
         # Store the session URL and session ID in user data
-        user_data[user_id][-1]['payment_link'] = session.url  # Payment link
-        user_data[user_id][-1]['payment_status'] = 'pending'  # Initial status
-        user_data[user_id][-1]['session_id'] = session.id  # Stripe session ID
+        user_data[user_id][-1]['payment_link'] = session.url  # Use session.url for the payment link
+        user_data[user_id][-1]['session_id'] = session.id  # Store the Stripe session ID
 
         # Generate the registration summary
         summary = (
-            f"{t('summary', lang)}\n"
+            f"📢 {t('summary', lang)}\n"
             f"🏆 {t('game', lang)}: {escape_markdown(game_info.get('game_name', ''))}\n"
             f"📍 {t('place', lang)}: {escape_markdown(game_info.get('place', ''))}\n"
             f"🕒 {t('date', lang)}: {escape_markdown(game_info.get('date', ''))}\n"
             f"🕒 {t('time', lang)}: {escape_markdown(game_info.get('time', ''))}\n"
             f"🎟️ {t('price_per_person', lang)}: €{escape_markdown(game_info.get('price_per_person', ''))}\n"
-            f"👤 {t('name', lang)}: {escape_markdown(user_data[user_id][-1]['first_name'])} {escape_markdown(user_data[user_id][-1]['last_name'])}\n"
+            f"👤 {t('full_name', lang)}: {escape_markdown(user_data[user_id][-1]['full_name'])}\n"
             f"✉️ {t('email', lang)}: {escape_markdown(user_data[user_id][-1]['email'])}\n"
             f"🧑‍🤝‍🧑 {t('attendees', lang)}: {cust_amount}\n"
             f"💶 {t('total_price', lang)}: €{total_price:.2f}\n"
@@ -443,11 +438,11 @@ def send_registration_email(user_data: dict, lang: str):
         game_details = user_data.get('game_details', {})
 
         user_summary = (
-            f"{t('summary', lang)}\n"
-            f"{t('name', lang)}: {user_data.get('first_name', '')} {user_data.get('last_name', '')}\n"
-            f"{t('email', lang)}: {user_data.get('email', '')}\n"
-            f"{t('attendees', lang)}: {user_data.get('cust_amount', 1)}\n"
-            f"{t('total_price', lang)}: €{user_data.get('total_price', 0):.2f}\n"
+            f"📢 {t('summary', lang)}\n"
+            f"👤 {t('full_name', lang)}: {escape_markdown(user_data[user_id][-1]['full_name'])}\n"
+            f"✉️ {t('email', lang)}: {reg.get('email', '')}\n"
+            f"🧑‍🤝‍🧑 {t('attendees', lang)}: {reg.get('cust_amount', 1)}\n"
+            f"💶 {t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
             f"🏆 {t('game', lang)}: {game_details.get('game_name', '')}\n"
             f"📍 {t('place', lang)}: {game_details.get('place', '')}\n"
             f"🕒 {t('date', lang)}: {game_details.get('date', '')}\n"
@@ -529,21 +524,20 @@ async def retrieve(update: Update, context: CallbackContext) -> None:
         previous_registrations = user_data[user_id]
         for reg in previous_registrations:
             reg_summary = (
-                f"{t('name', lang)}: {reg.get('first_name', '')} {reg.get('last_name', '')}\n"
-                f"{t('email', lang)}: {reg.get('email', '')}\n"
-                f"{t('attendees', lang)}: {reg.get('cust_amount', 1)}\n"
-                f"{t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
+                f"👤 {t('full_name', lang)}: {escape_markdown(user_data[user_id][-1]['full_name'])}\n"
+                f"✉️ {t('email', lang)}: {reg.get('email', '')}\n"
+                f"🧑‍🤝‍🧑 {t('attendees', lang)}: {reg.get('cust_amount', 1)}\n"
+                f"💶 {t('total_price', lang)}: €{reg.get('total_price', 0):.2f}\n"
                 f"🏆 {t('game', lang)}: {reg.get('game_details', {}).get('game_name', '')}\n"
                 f"📍 {t('place', lang)}: {reg.get('game_details', {}).get('place', '')}\n"
                 f"🕒 {t('date', lang)}: {reg.get('game_details', {}).get('date', '')}\n"
                 f"🕒 {t('time', lang)}: {reg.get('game_details', {}).get('time', '')}\n"
                 f"📄 {t('invoice_number', lang)}: {reg.get('invoice_number', '')}\n"
-                f"📄 {t('payment_status', lang)}: {reg.get('payment_status', '')}\n"
             )
             
             # Only include the "Canceled" line if the registration is canceled
             if reg.get('canceled'):
-                reg_summary += f"⚠️ {t('canceled', lang)}: {reg.get('canceled', '')}\n"
+                reg_summary += f"⚠️ {t('canceled', lang)}: {t('canceled', lang)}\n"
             await update.message.reply_text(reg_summary)
 
             # Send PDF if available
@@ -599,8 +593,7 @@ def main():
         states={
             LANGUAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_language)],
             MAIN_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_main_menu)],
-            FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_first_name)],
-            LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_last_name)],
+            FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_full_name)],
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
             CUST_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cust_amount)],
             CANCEL_INVOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cancel_registration)],
